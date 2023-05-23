@@ -37,6 +37,7 @@ RUN apt-get clean && apt-get update && apt-get install -y \
     imagemagick \
     libonig-dev \
     git \
+    php7.4-gmp \
     sudo nano \
     --no-install-recommends \
     && docker-php-ext-configure intl \
