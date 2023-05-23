@@ -37,7 +37,7 @@ RUN apt-get clean && apt-get update && apt-get install -y \
     imagemagick \
     libonig-dev \
     git \
-    php7.4-gmp \
+    libgmp-dev \
     sudo nano \
     --no-install-recommends \
     && docker-php-ext-configure intl \
@@ -67,7 +67,8 @@ RUN apt-get clean && apt-get update && apt-get install -y \
     && docker-php-ext-enable imagick \
     # Redis
     && pecl install -o -f redis \
-    &&  docker-php-ext-enable redis
+    &&  docker-php-ext-enable redis \
+    && docker-php-ext-install gmp
 
 
 ###############################
