@@ -1,149 +1,187 @@
-FROM php:7.3.9-fpm
+FROM php:8.0-fpm
 
-#############
-# PHP SETUP #
-#############
+# Fix GPG issues and install base dependencies
+RUN set -eux; \
+    # Clear existing keys, lists, and caches
+    rm -rf /var/lib/apt/lists/* \
+           /etc/apt/sources.list.d/* \
+           /etc/apt/trusted.gpg \
+           /etc/apt/trusted.gpg.d/* \
+           /var/cache/apt/archives/* \
+           /var/cache/apt/archives/partial/*; \
+    mkdir -p /var/cache/apt/archives/partial; \
+    # Create fresh sources.list
+    echo "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list; \
+    echo "deb http://security.debian.org/debian-security bullseye-security main" >> /etc/apt/sources.list; \
+    echo "deb http://deb.debian.org/debian bullseye-updates main" >> /etc/apt/sources.list; \
+    # Update and install prerequisites
+    apt-get clean; \
+    apt-get update --allow-insecure-repositories; \
+    apt-get install -y --allow-unauthenticated --no-install-recommends \
+        ca-certificates \
+        gnupg2; \
+    # Add all required keys
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 0E98404D386FA1D9; \
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 648ACFD622F3D138; \
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 112695A0E562B32A; \
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 54404762BBB6E853; \
+    # Clean up
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    # Update again with new keys
+    apt-get update
 
-# copy config
+# Install build essentials first
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        autoconf \
+        pkg-config \
+        build-essential \
+        apt-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install GD dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libfreetype6-dev \
+        libjpeg62-turbo-dev \
+        libpng-dev \
+        libwebp-dev \
+        libxpm-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && docker-php-ext-configure gd \
+        --enable-gd \
+        --with-freetype \
+        --with-jpeg \
+        --with-webp \
+        --with-xpm \
+    && docker-php-ext-install -j$(nproc) gd
+
+# Install other PHP extension dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        zlib1g-dev \
+        libzip-dev \
+        libicu-dev \
+        libpq-dev \
+        libonig-dev \
+        libxml2-dev \
+        unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && docker-php-ext-install -j$(nproc) \
+        zip \
+        intl \
+        pdo_mysql \
+        pdo_pgsql \
+        bcmath \
+        opcache
+
+# Install additional PHP extensions
+RUN docker-php-ext-install -j$(nproc) \
+    ctype \
+    dom \
+    exif \
+    fileinfo \
+    iconv \
+    mbstring \
+    xml
+
+# Install FreeTDS and PDO_DBLIB
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    freetds-dev \
+    freetds-bin \
+    freetds-common \
+    libsybdb5 \
+    libct4 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/lib/x86_64-linux-gnu/libsybdb.so /usr/lib/ \
+    && docker-php-ext-configure pdo_dblib --with-libdir=lib/x86_64-linux-gnu \
+    && docker-php-ext-install pdo_dblib
+
+# Install ImageMagick
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    imagemagick \
+    libmagickwand-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && pecl install imagick \
+    && docker-php-ext-enable imagick
+
+# Install Redis
+RUN pecl install redis \
+    && docker-php-ext-enable redis
+
+# Install APCu
+RUN pecl install apcu \
+    && docker-php-ext-enable apcu
+
+# Install additional utilities
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ghostscript \
+    libgs-dev \
+    jpegoptim \
+    pngquant \
+    xmlstarlet \
+    libhiredis-dev \
+    wget \
+    git \
+    nano \
+    supervisor \
+    cron \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install fonts
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libfreetype6 \
+    xfonts-base \
+    xfonts-75dpi \
+    fonts-wqy-microhei \
+    ttf-wqy-microhei \
+    fonts-wqy-zenhei \
+    ttf-wqy-zenhei \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install phpiredis
+RUN git clone https://github.com/nrk/phpiredis.git /tmp/phpiredis && \
+    cd /tmp/phpiredis && \
+    phpize && \
+    ./configure && \
+    make && \
+    make install && \
+    cd / && \
+    rm -rf /tmp/phpiredis && \
+    echo "extension=phpiredis.so" > /usr/local/etc/php/conf.d/phpiredis.ini
+
+# Create required directories
+RUN mkdir -p \
+    /var/log/supervisor \
+    /etc/supervisor/conf.d \
+    /etc/cron.d \
+    /var/log/php-app \
+    /var/log/php-fpm \
+    /var/log/cron \
+    && chown www-data:www-data \
+        /var/log/php-app \
+        /var/log/php-fpm \
+        /var/log/cron
+
+# Copy configurations
+COPY config/supervisor/supervisord.conf /etc/supervisor/
 COPY config/php/custom.ini /usr/local/etc/php/conf.d/
 
+# Install wkhtmltopdf
+RUN wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.bullseye_amd64.deb \
+    && apt-get update \
+    && apt-get install -y ./wkhtmltox_0.12.6.1-2.bullseye_amd64.deb \
+    && rm wkhtmltox_0.12.6.1-2.bullseye_amd64.deb \
+    && rm -rf /var/lib/apt/lists/*
 
-########################
-# INSTALL DEPENDENCIES #
-########################
-
-RUN apt-get clean && apt-get update && apt-get install -y zlib1g-dev libicu-dev libpq-dev wget gdebi xmlstarlet \
-    libfreetype6 xfonts-base xfonts-75dpi fonts-wqy-microhei ttf-wqy-microhei fonts-wqy-zenhei ttf-wqy-zenhei \
-    libhiredis-dev libzip-dev \
-    ghostscript libgs-dev \
-    jpegoptim pngquant \
-    libmagickwand-dev libmagickcore-dev imagemagick \
-    git \
-    sudo nano \
-    --no-install-recommends \
-    && docker-php-ext-configure intl \
-    && docker-php-ext-install xml \
-    && docker-php-ext-install bcmath \
-    && docker-php-ext-install ctype \
-    && docker-php-ext-install dom \
-    && docker-php-ext-install exif \
-    && docker-php-ext-install fileinfo \
-    && docker-php-ext-install gd \
-    && docker-php-ext-install iconv \
-    && docker-php-ext-install intl \
-    && docker-php-ext-install json \
-    && docker-php-ext-install mbstring \
-    && docker-php-ext-install opcache \
-    && docker-php-ext-install pdo \
-    && docker-php-ext-install pdo_mysql \
-    && docker-php-ext-install pdo_pgsql \
-    && docker-php-ext-install zip \
-    ## APCu
-    && pecl install apcu \
-    && docker-php-ext-enable apcu \
-    # GD
-    && docker-php-ext-configure gd --with-freetype-dir=/usr/include/ --with-jpeg-dir=/usr/include/ \
-    && docker-php-ext-install -j$(nproc) gd \
-    # ImageMagick
-    && pecl install imagick \
-    && docker-php-ext-enable imagick \
-    # Redis
-    && pecl install -o -f redis \
-    &&  docker-php-ext-enable redis
-
-
-###############################
-# BUILD AND INSTALL PHPIREDIS #
-###############################
-
-RUN git clone https://github.com/nrk/phpiredis.git ./phpiredis \
-    && ( \
-        cd ./phpiredis \
-        && phpize \
-        && ./configure --enable-phpiredis \
-        && make \
-        && make install \
-    ) \
-    && rm -rf phpiredis \
-    && echo "extension=phpiredis.so" >> /usr/local/etc/php/conf.d/phpiredis.ini \
-    && docker-php-ext-enable phpiredis
-
-
-######################
-# INSTALL SUPERVISOR #
-######################
-
-RUN apt-get install -y supervisor && \
-  mkdir -p /var/log/supervisor && \
-  mkdir -p /etc/supervisor/conf.d
-
-# add supervised configs
-COPY config/supervisor/supervisord.conf /etc/supervisor/
-
-
-################
-# INSTALL CRON #
-################
-
-RUN apt-get install -y cron
-RUN mkdir -p /etc/cron.d
-
-
-#######################
-# INSTALL WKHTMLTOPDF #
-#######################
-
-RUN wget https://github.com/wkhtmltopdf/wkhtmltopdf/releases/download/0.12.5/wkhtmltox_0.12.5-1.stretch_amd64.deb
-RUN gdebi --n wkhtmltox_0.12.5-1.stretch_amd64.deb
-
-
-#################
-# SETUP LOGGING #
-#################
-
-# create the php application log
-RUN mkdir -p /var/log/php-app
-RUN chown www-data:www-data /var/log/php-app
-
-# create the php log
-RUN mkdir -p /var/log/php-fpm
-RUN chown www-data:www-data /var/log/php-fpm
-
-# create the cron log
-RUN mkdir -p /var/log/cron
-RUN chown www-data:www-data /var/log/cron
-
-
-####################
-# INSTALL COMPOSER #
-####################
-
+# Install Composer
 RUN curl -sS https://getcomposer.org/installer | php -- \
-        --install-dir=/usr/local/bin \
-        --filename=composer
+    --install-dir=/usr/local/bin \
+    --filename=composer
 
-#############################################
-# INSTALL SYBASE EXTENSION AND DEPENDENCIES #
-#############################################
-RUN rm /etc/apt/preferences.d/no-debian-php && apt-get update -y && apt-get install -y \
-    freetds-common \
-    freetds-bin unixodbc \
-    php7.3-sybase \
-    # copy the deb sybase pdo module to the docker local/etc and symlink the extension to enable it
-    && cp /etc/php/7.3/mods-available/pdo_dblib.ini /usr/local/etc/php/conf.d/pdo_dblib.ini \
-    && ln -s /usr/lib/php/20180731/pdo_dblib.so /usr/local/lib/php/extensions/no-debug-non-zts-20180731/pdo_dblib.so
-
-################################
-# Define Mountable Directories #
-################################
-
+# Define volume
 VOLUME ["/etc/supervisor/conf.d"]
 
-
-###################
-# DEFAULT COMMAND #
-###################
-
+# Expose ports
 EXPOSE 9000 8022
 
+# Set default command
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
