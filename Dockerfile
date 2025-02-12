@@ -64,6 +64,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libonig-dev \
         libxml2-dev \
         unzip \
+        git \
+        sudo nano vim \
     && rm -rf /var/lib/apt/lists/* \
     && docker-php-ext-install -j$(nproc) \
         zip \
@@ -176,6 +178,9 @@ RUN wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/w
 RUN curl -sS https://getcomposer.org/installer | php -- \
     --install-dir=/usr/local/bin \
     --filename=composer
+
+RUN curl --insecure https://curl.se/ca/cacert.pem -o /usr/share/ca-certificates/ca-bundle.pem
+RUN curl --insecure https://curl.se/ca/cacert.pem -o /usr/share/ca-certificates/ca-bundle.crt
 
 # Define volume
 VOLUME ["/etc/supervisor/conf.d"]
