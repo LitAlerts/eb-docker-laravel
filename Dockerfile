@@ -11,9 +11,9 @@ RUN set -eux; \
            /var/cache/apt/archives/partial/*; \
     mkdir -p /var/cache/apt/archives/partial; \
     # Create fresh sources.list
-    echo "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list; \
-    echo "deb http://security.debian.org/debian-security bullseye-security main" >> /etc/apt/sources.list; \
-    echo "deb http://deb.debian.org/debian bullseye-updates main" >> /etc/apt/sources.list; \
+    echo "deb http://deb.debian.org/debian bookworm main" > /etc/apt/sources.list; \
+    echo "deb http://security.debian.org/debian-security bookworm-security main" >> /etc/apt/sources.list; \
+    echo "deb http://deb.debian.org/debian bookworm-updates main" >> /etc/apt/sources.list; \
     # Update and install prerequisites
     apt-get clean; \
     apt-get update --allow-insecure-repositories; \
@@ -167,20 +167,56 @@ RUN mkdir -p \
 COPY config/supervisor/supervisord.conf /etc/supervisor/
 COPY config/php/custom.ini /usr/local/etc/php/conf.d/
 
+# Install openssl and curl requirements
+RUN apt-get update && apt-get upgrade -y && apt-get install -y build-essential git autoconf libtool pkg-config libpsl-dev wget vim
+
+# Install OpenSSL 3.4.0
+RUN cd /usr/local/src && \
+    wget https://www.openssl.org/source/openssl-3.4.0.tar.gz && \
+    tar -xzf openssl-3.4.0.tar.gz && \
+    cd openssl-3.4.0 && \
+    ./config --prefix=/usr/local/ssl && \
+    make && \
+    make install
+
+# Add openssl lib reference
+RUN touch /etc/ld.so.conf.d/openssl.conf && \
+    echo "/usr/local/ssl/lib64" | tee -a /etc/ld.so.conf.d/openssl.conf && \
+    ldconfig
+
 # Install wkhtmltopdf
-RUN wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.bullseye_amd64.deb \
+RUN wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.bookworm_amd64.deb \
     && apt-get update \
-    && apt-get install -y ./wkhtmltox_0.12.6.1-2.bullseye_amd64.deb \
-    && rm wkhtmltox_0.12.6.1-2.bullseye_amd64.deb \
+    && apt-get install -y ./wkhtmltox_0.12.6.1-3.bookworm_amd64.deb \
+    && rm wkhtmltox_0.12.6.1-3.bookworm_amd64.deb \
     && rm -rf /var/lib/apt/lists/*
+
+# Remove old curl
+RUN apt remove -y curl && rm -rf /usr/local/include/curl && rm -f /usr/local/lib/libcurl.* && rm -f /usr/local/bin/curl
+
+# Install new curl with the new OpenSSL installation from above
+RUN cd /usr/local/src && \
+    git clone https://github.com/curl/curl.git && \
+    cd curl && \
+    autoreconf -fi && \
+    LDFLAGS="-L/usr/local/ssl/lib64 -Wl,-rpath,/usr/local/ssl/lib64" LIBS="-ldl -lpthread" ./configure --with-openssl=/usr/local/ssl --enable-static --disable-shared --with-ssl && \
+    make && \
+    make install && \
+    ldconfig
 
 # Install Composer
 RUN curl -sS https://getcomposer.org/installer | php -- \
     --install-dir=/usr/local/bin \
     --filename=composer
 
-RUN curl --insecure https://curl.se/ca/cacert.pem -o /usr/share/ca-certificates/ca-bundle.pem
-RUN curl --insecure https://curl.se/ca/cacert.pem -o /usr/share/ca-certificates/ca-bundle.crt
+# Download and install the latest root certs
+RUN curl --insecure https://curl.se/ca/cacert.pem -o /tmp/ca-bundle.crt && \
+    cp /tmp/ca-bundle.crt /usr/share/ca-certificates/ca-bundle.crt && \
+    cp /tmp/ca-bundle.crt /usr/share/ca-certificates/ca-bundle.pem && \
+    update-ca-certificates && \
+    cp /tmp/ca-bundle.crt /usr/share/ca-certificates/ca-bundle.crt && \
+    cp /tmp/ca-bundle.crt /usr/share/ca-certificates/ca-bundle.pem
+
 
 # Define volume
 VOLUME ["/etc/supervisor/conf.d"]
